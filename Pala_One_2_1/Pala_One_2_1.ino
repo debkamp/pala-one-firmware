@@ -4,6 +4,14 @@
 #define BOARD_V1_1
 // #define BOARD_V1_2
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── Apps: comment out any app you don't want compiled into the firmware ───────
+#define APP_CLICK_COUNTER
+// ─────────────────────────────────────────────────────────────────────────────
+// Add each new app to this OR chain so the Apps menu entry appears automatically
+#if defined(APP_CLICK_COUNTER)
+#  define ANY_APP_DEFINED
+#endif
 #ifdef BOARD_V1_1
   using DisplayType = EInkDisplay_WirelessPaperV1_1;
 #else
@@ -94,7 +102,13 @@ enum Mode {
   MODE_LIST,
   MODE_BM_BOOK_SELECT,
   MODE_BM_LIST,
-  MODE_BM_PREVIEW
+  MODE_BM_PREVIEW,
+#ifdef ANY_APP_DEFINED
+  MODE_APPS,
+#endif
+#ifdef APP_CLICK_COUNTER
+  MODE_CLICK_COUNTER,
+#endif
 };
 
 enum ReaderLongPressAction {
@@ -108,7 +122,10 @@ enum LibraryEntryType {
   LIB_ENTRY_BOOKMARKS,
   LIB_ENTRY_LIST,
   LIB_ENTRY_ABOUT,
-  LIB_ENTRY_UPLOAD
+  LIB_ENTRY_UPLOAD,
+#ifdef ANY_APP_DEFINED
+  LIB_ENTRY_APPS,
+#endif
 };
 
 struct BookInfo {
@@ -292,6 +309,12 @@ uint32_t g_offsetCacheStamp = 1;
 
 uint32_t lastUserActionMs = 0;
 int menuDrawsSinceFull = 0;
+#ifdef ANY_APP_DEFINED
+static int g_appsSelectedIndex = 0;
+#endif
+#ifdef APP_CLICK_COUNTER
+static int g_clickCounter = 0;
+#endif
 LayoutMetrics g_metrics;
 bool g_metricsValid = false;
 
@@ -1225,6 +1248,9 @@ static String libraryEntryLabel(int idx) {
     case LIB_ENTRY_LIST:      return "List";
     case LIB_ENTRY_ABOUT:     return "Device";
     case LIB_ENTRY_UPLOAD:    return "Upload";
+#ifdef ANY_APP_DEFINED
+    case LIB_ENTRY_APPS:      return "Apps";
+#endif
   }
   return "";
 }
@@ -1288,6 +1314,14 @@ static void buildLibraryEntries() {
     g_library.entryDepths[g_library.entryCount] = 0;
     g_library.entryCount++;
   }
+#ifdef ANY_APP_DEFINED
+  if (g_library.entryCount < MAX_LIBRARY_ENTRIES) {
+    g_library.entryTypes[g_library.entryCount] = LIB_ENTRY_APPS;
+    g_library.entryRefs[g_library.entryCount] = -1;
+    g_library.entryDepths[g_library.entryCount] = 0;
+    g_library.entryCount++;
+  }
+#endif
   if (g_library.entryCount < MAX_LIBRARY_ENTRIES) {
     g_library.entryTypes[g_library.entryCount] = LIB_ENTRY_UPLOAD;
     g_library.entryRefs[g_library.entryCount] = -1;
@@ -2317,6 +2351,9 @@ static void drawLibrary() {
     bool isSystem = (g_library.entryTypes[idx] == LIB_ENTRY_BOOKMARKS ||
                      g_library.entryTypes[idx] == LIB_ENTRY_LIST ||
                      g_library.entryTypes[idx] == LIB_ENTRY_ABOUT ||
+#ifdef ANY_APP_DEFINED
+                     g_library.entryTypes[idx] == LIB_ENTRY_APPS ||
+#endif
                      g_library.entryTypes[idx] == LIB_ENTRY_UPLOAD);
     bool boldText = (idx == g_library.selectedItem);
     drawMenuBulletRow(y, label, idx == g_library.selectedItem, boldText, g_library.entryDepths[idx], isSystem);
@@ -2419,6 +2456,53 @@ static void drawAbout() {
 
   display.update();
 }
+
+#ifdef ANY_APP_DEFINED
+static void drawAppsMenu() {
+  prepareMenuFrame();
+  u8g2.setFont(MAIN_FONT);
+  int ascent = u8g2.getFontAscent();
+  int descent = u8g2.getFontDescent();
+  int lineH = (ascent - descent) + g_settings.lineGap + 1;
+  int y = drawSectionHeader("Apps");
+
+  const char* apps[] = {
+#ifdef APP_CLICK_COUNTER
+    "Click Counter",
+#endif
+  };
+  const int appCount = (int)(sizeof(apps) / sizeof(apps[0]));
+
+  for (int i = 0; i < appCount; i++) {
+    bool selected = (i == g_appsSelectedIndex);
+    u8g2.setFont(selected ? BOLD_FONT : MAIN_FONT);
+    u8g2.setCursor(UI_LIST_LEFT, y);
+    u8g2.print(apps[i]);
+    y += lineH;
+  }
+
+  display.update();
+}
+#endif
+
+#ifdef APP_CLICK_COUNTER
+static void drawClickCounter() {
+  prepareMenuFrame();
+  u8g2.setFont(MAIN_FONT);
+  int y = drawSectionHeader("Click Counter");
+
+  u8g2.setFont(u8g2_font_helvB14_te);
+  String val = String(g_clickCounter);
+  int w = u8g2.getUTF8Width(val.c_str());
+  int numAscent = u8g2.getFontAscent();
+  int cx = (SCREEN_W - w) / 2;
+  int cy = y + numAscent + ((SCREEN_H - y - numAscent) / 2) - 4;
+  u8g2.setCursor(cx, cy);
+  u8g2.print(val.c_str());
+
+  display.update();
+}
+#endif
 
 static void drawBookmarksBookSelect() {
   prepareMenuFrame();
@@ -3916,6 +4000,57 @@ static void handleModeAbout() {
   }
 }
 
+#ifdef ANY_APP_DEFINED
+static void handleModeApps() {
+  const char* apps[] = {
+#ifdef APP_CLICK_COUNTER
+    "",
+#endif
+  };
+  const int appCount = (int)(sizeof(apps) / sizeof(apps[0]));
+
+  if (btns.shortClick) {
+    g_appsSelectedIndex = (g_appsSelectedIndex + 1) % appCount;
+    drawAppsMenu();
+    return;
+  }
+  if (btns.doubleClick) {
+    int i = 0;
+#ifdef APP_CLICK_COUNTER
+    if (g_appsSelectedIndex == i) { mode = MODE_CLICK_COUNTER; drawClickCounter(); return; }
+    i++;
+#endif
+    (void)i;
+    return;
+  }
+  // Triple-click handled globally → library root
+}
+#endif
+
+#ifdef APP_CLICK_COUNTER
+static void handleModeClickCounter() {
+  // Fire while the button is still held — no need to release first.
+  // Disarm the press so the subsequent release doesn't re-trigger.
+  if (btns.stablePressed && btns.pressArmed &&
+      (uint32_t)(millis() - btns.pressStart) >= LONG_MS) {
+    btns.pressArmed = false;
+    g_clickCounter = 0;
+    mode = MODE_APPS;
+    drawAppsMenu();
+    return;
+  }
+  int add = 0;
+  if (btns.shortClick)  add = 1;
+  if (btns.doubleClick) add = 2;
+  if (btns.tripleClick) add = 3;
+  if (btns.quadClick)   add = 4;
+  if (add > 0) {
+    g_clickCounter += add;
+    drawClickCounter();
+  }
+}
+#endif
+
 static void handleModeBookmarkBookSelect() {
   if (btns.tripleClick) {
     enterLibraryRoot(true);
@@ -4111,6 +4246,15 @@ static void handleModeLibrary() {
     return;
   }
 
+#ifdef ANY_APP_DEFINED
+  if (entryType == LIB_ENTRY_APPS) {
+    g_appsSelectedIndex = 0;
+    mode = MODE_APPS;
+    drawAppsMenu();
+    return;
+  }
+#endif
+
   startUploadMode();
 }
 
@@ -4226,7 +4370,11 @@ void loop() {
   if (btns.tripleClick && mode != MODE_UPLOAD
       && mode != MODE_BM_PREVIEW
       && mode != MODE_BM_LIST
-      && mode != MODE_BM_BOOK_SELECT) {
+      && mode != MODE_BM_BOOK_SELECT
+#ifdef APP_CLICK_COUNTER
+      && mode != MODE_CLICK_COUNTER
+#endif
+      ) {
     enterLibraryRoot(true);
     markUserActivity();
     return;
@@ -4236,6 +4384,12 @@ void loop() {
     case MODE_UPLOAD:         handleModeUpload(); break;
     case MODE_ABOUT:          handleModeAbout(); break;
     case MODE_LIST:           handleModeList(); break;
+#ifdef ANY_APP_DEFINED
+    case MODE_APPS:           handleModeApps(); break;
+#endif
+#ifdef APP_CLICK_COUNTER
+    case MODE_CLICK_COUNTER:  handleModeClickCounter(); break;
+#endif
     case MODE_BM_BOOK_SELECT: handleModeBookmarkBookSelect(); break;
     case MODE_BM_LIST:        handleModeBookmarkList(); break;
     case MODE_BM_PREVIEW:     handleModeBookmarkPreview(); break;
