@@ -1991,18 +1991,23 @@ static uint32_t readPageFromFile(File& f, uint32_t startPos, bool draw, String* 
     String printable = toPrint;
     trimTrailingSpaces(printable);
 
-    if (draw) {
-      u8g2.setCursor(MARGIN_X, cursorY);
-      u8g2.print(printable.c_str());
-      cursorY += m.lineH;
+    //for FlashCards --------- indicates end of page
+    if(printable == "---------")
+      linesUsed = m.maxLines;
+    else{
+      if (draw) {
+        u8g2.setCursor(MARGIN_X, cursorY);
+        u8g2.print(printable.c_str());
+        cursorY += m.lineH;
+      }
+      if (outText) {
+        String t = printable;
+        t.trim();
+        (*outText) += t;
+        (*outText) += "\n";
+      }
+      linesUsed++;
     }
-    if (outText) {
-      String t = printable;
-      t.trim();
-      (*outText) += t;
-      (*outText) += "\n";
-    }
-    linesUsed++;
   };
 
   auto safeReturn = [&](uint32_t off) -> uint32_t {
@@ -3178,6 +3183,14 @@ static void handleRoot() {
     "<div class='actions'><button type='submit'>Upload</button><a class='btn secondary' href='/files'>Manage files</a></div>"
     "</form></div>";
 
+    out +=
+    "<div class='card'><h2>Upload FlashCards</h2>"
+    "<p class='muted'>Send UTF-8 plain text files to <b>/books</b> on the device, then sort them into folders from the Files page.</p>"
+    "<form method='POST' action='/upload-flashCard' enctype='multipart/form-data' accept-charset='UTF-8' style='margin-top:14px'>"
+    "<input type='file' name='file' accept='.txt,text/plain' required>"
+    "<div class='actions'><button type='submit'>Upload</button><a class='btn secondary' href='/files'>Manage files</a></div>"
+    "</form></div>";
+
   out +=
     "<div class='card'><h2>Upload app (.bin)</h2>"
     "<p class='muted'>Upload a Pala app binary compiled with the Pala SDK. "
@@ -4166,6 +4179,125 @@ static void handleUploadBookStream() {
   }
 }
 
+static void handleUploadFlashCardStream() {
+  HTTPUpload& up = server.upload();
+
+  if (up.status == UPLOAD_FILE_START) {
+    g_upload.bookOk = false;
+    g_upload.bookError = "";
+    g_upload.bookFinalName = "";
+    g_upload.bookPendingUtf8Tail = "";
+    g_upload.bookTmpPath = "";
+    g_upload.bookCompactLastWasSpace = false;
+    g_upload.bookCompactNewlineCount = 0;
+
+    loadBooks();
+    if (g_library.bookCount >= MAX_BOOKS) {
+      g_upload.bookError = "Library full";
+      return;
+    }
+
+    size_t freeBytes = fsFreeBytesSafe();
+    if (freeBytes < 8192) {
+      g_upload.bookError = "Not enough free space";
+      return;
+    }
+
+    String clean = sanitizeUploadedFilename(up.filename);
+    g_upload.bookFinalName = clean;
+    g_upload.bookTmpPath = "/books/" + clean + ".tmp";
+
+    if (FS.exists(g_upload.bookTmpPath)) FS.remove(g_upload.bookTmpPath);
+    g_upload.bookTmpFile = FS.open(g_upload.bookTmpPath, "w");
+    if (!g_upload.bookTmpFile) {
+      g_upload.bookError = "Cannot create temp upload file";
+      g_upload.bookTmpPath = "";
+    }
+  }
+  else if (up.status == UPLOAD_FILE_WRITE) {
+    if (g_upload.bookError.length() > 0) return;
+    if (g_upload.bookTmpFile && up.currentSize > 0) {
+      String chunk = g_upload.bookPendingUtf8Tail + String((const char*)up.buf, up.currentSize);
+      int len = (int)chunk.length();
+      if (len > 4) {
+        g_upload.bookPendingUtf8Tail = chunk.substring(len - 4);
+        chunk = chunk.substring(0, len - 4);
+      } else {
+        g_upload.bookPendingUtf8Tail = chunk;
+        chunk = "";
+      }
+      if (chunk.length() > 0) {
+        String cleaned = normalizeTypography(chunk);
+        cleaned = compactText(cleaned,
+                              &g_upload.bookCompactLastWasSpace,
+                              &g_upload.bookCompactNewlineCount,
+                              false);
+        size_t cleanedLen = cleaned.length();
+        size_t wrote = g_upload.bookTmpFile.print(cleaned);
+        if (wrote != cleanedLen) {
+          // Short write — out of space or FS error. Abort the upload so a
+          // truncated file isn't promoted to a finalized book.
+          g_upload.bookError = "Write failed (out of space?)";
+          g_upload.bookTmpFile.close();
+          if (g_upload.bookTmpPath.length() > 0 && FS.exists(g_upload.bookTmpPath)) {
+            FS.remove(g_upload.bookTmpPath);
+          }
+        }
+      }
+    }
+  }
+  else if (up.status == UPLOAD_FILE_END) {
+    if (g_upload.bookError.length() > 0 && !g_upload.bookTmpFile) return;
+    if (g_upload.bookTmpFile) {
+      if (g_upload.bookPendingUtf8Tail.length() > 0) {
+        String cleaned = normalizeTypography(g_upload.bookPendingUtf8Tail);
+        cleaned = compactText(cleaned,
+                              &g_upload.bookCompactLastWasSpace,
+                              &g_upload.bookCompactNewlineCount,
+                              true);
+        size_t cleanedLen = cleaned.length();
+        size_t wrote = g_upload.bookTmpFile.print(cleaned);
+        if (wrote != cleanedLen && g_upload.bookError.length() == 0) {
+          g_upload.bookError = "Write failed (out of space?)";
+        }
+        g_upload.bookPendingUtf8Tail = "";
+      }
+      g_upload.bookTmpFile.close();
+
+      if (g_upload.bookError.length() > 0) {
+        if (g_upload.bookTmpPath.length() > 0 && FS.exists(g_upload.bookTmpPath)) {
+          FS.remove(g_upload.bookTmpPath);
+        }
+      } else if (g_upload.bookTmpPath.length() > 0 && up.totalSize > 0) {
+        String finalPath = g_upload.bookTmpPath.substring(0, g_upload.bookTmpPath.length() - 4);
+        if (FS.exists(finalPath)) FS.remove(finalPath);
+        if (FS.rename(g_upload.bookTmpPath, finalPath)) {
+          g_upload.bookOk = true;
+        } else {
+          if (FS.exists(g_upload.bookTmpPath)) FS.remove(g_upload.bookTmpPath);
+          g_upload.bookError = "Failed to finalize upload";
+        }
+      } else {
+        if (g_upload.bookTmpPath.length() > 0 && FS.exists(g_upload.bookTmpPath)) FS.remove(g_upload.bookTmpPath);
+        g_upload.bookError = "Empty upload";
+      }
+      g_upload.bookTmpPath = "";
+    } else {
+      if (g_upload.bookTmpPath.length() > 0 && FS.exists(g_upload.bookTmpPath)) FS.remove(g_upload.bookTmpPath);
+      if (g_upload.bookError.length() == 0) g_upload.bookError = "Upload failed";
+      g_upload.bookTmpPath = "";
+    }
+  }
+  else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (g_upload.bookTmpFile) g_upload.bookTmpFile.close();
+    if (g_upload.bookTmpPath.length() > 0 && FS.exists(g_upload.bookTmpPath)) FS.remove(g_upload.bookTmpPath);
+    g_upload.bookPendingUtf8Tail = "";
+    g_upload.bookTmpPath = "";
+    g_upload.bookOk = false;
+    g_upload.bookError = "Upload aborted";
+  }
+}
+
 static void handleUploadSleepStream() {
   HTTPUpload& upS = server.upload();
 
@@ -4221,6 +4353,45 @@ static void handleUploadAppDone() {
            "<p class='muted'>App is now available in the Apps menu on the device.</p>"
            "<div class='actions'><a class='btn' href='/'>Upload another</a></div></div>";
   String page = successPage("App uploaded", "App saved.", "&#10003; App ready.", inner);
+  server.send(200, "text/html; charset=utf-8", page);
+}
+
+static void handleUploadFlashCardDone() {
+  if (!g_upload.bookOk) {
+    server.send(400, "text/plain; charset=utf-8", g_upload.bookError.length() ? g_upload.bookError : "Upload failed");
+    return;
+  }
+
+  loadBooks();
+  size_t totalBytes = FS.totalBytes();
+  size_t usedBytes = FS.usedBytes();
+  size_t freeBytes = (totalBytes >= usedBytes) ? (totalBytes - usedBytes) : 0;
+
+  String finalPath = "/books/" + g_upload.bookFinalName;
+  size_t storedSize = 0;
+  File stored = FS.open(finalPath, "r");
+  if (stored) {
+    storedSize = stored.size();
+    stored.close();
+  }
+
+  String inner;
+  inner.reserve(1200);
+  inner += "<div class='card'><h2>Upload complete</h2><p class='muted'>Your flash card is now stored on the device and available in the library.</p>";
+  inner += "<div class='stats'>";
+  inner += "<div class='stat'><span class='muted'>Book</span><b>" + htmlEscape(g_upload.bookFinalName) + "</b></div>";
+  inner += "<div class='stat'><span class='muted'>Stored size</span><b>" + humanBytes(storedSize) + "</b></div>";
+  inner += "<div class='stat'><span class='muted'>Books now</span><b>" + String(g_library.bookCount) + "</b></div>";
+  inner += "<div class='stat'><span class='muted'>Free space</span><b>" + humanBytes(freeBytes) + "</b></div>";
+  inner += "</div><div class='actions'><a class='btn' href='/'>Upload another</a><a class='btn secondary' href='/files'>Open files</a></div></div>";
+  inner += storageCardHtml();
+
+  String page = successPage(
+    "Upload complete",
+    "Book saved successfully.",
+    "&#10003; Upload finished. No more blank status page.",
+    inner
+  );
   server.send(200, "text/html; charset=utf-8", page);
 }
 
@@ -4336,6 +4507,7 @@ static void registerWebRoutes() {
 
   server.on("/upload-sleep", HTTP_POST, handleUploadSleepDone, handleUploadSleepStream);
   server.on("/upload-app",   HTTP_POST, handleUploadAppDone,   handleUploadAppStream);
+  server.on("/upload-flashCard",   HTTP_POST, handleUploadFlashCardDone,   handleUploadFlashCardStream);
   server.on("/upload", HTTP_POST, handleUploadDone, handleUploadBookStream);
 }
 
