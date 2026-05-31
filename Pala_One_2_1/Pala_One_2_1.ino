@@ -6,7 +6,7 @@
 
 // ── Board selection: uncomment the line that matches your hardware ────────────
 // #define BOARD_V1_1
-// #define BOARD_V1_2
+#define BOARD_V1_2
 // ─────────────────────────────────────────────────────────────────────────────
 #ifdef BOARD_V1_1
   using DisplayType = EInkDisplay_WirelessPaperV1_1;
@@ -23,6 +23,11 @@
 DisplayType display;
 
 #include "pala_one_sleep_black_icon_v4.h"
+#include "pala_one_sleep_1.h"
+#include "pala_one_sleep_2.h"
+#include "pala_one_sleep_3.h"
+#include "pala_one_sleep_4.h"
+#include "pala_one_sleep_5.h"
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -4427,18 +4432,44 @@ static void drawSleepScreen() {
   display.clear();
   beginPageCanvas();
 
-  File sf = FS.open("/sleep.bin", "r");
-  if (sf && sf.size() >= 3904) {
-    static uint8_t sleepBuf[3904];
-    sf.read(sleepBuf, 3904);
-    sf.close();
-    gfx.fillScreen(1);
-    gfx.drawXBitmap(0, 0, sleepBuf, SCREEN_W, SCREEN_H, 0);
-  } else {
-    if (sf) sf.close();
-    gfx.fillScreen(1);
-    gfx.drawXBitmap(0, 0, pala_one_sleep_black_icon_v4_bits, SCREEN_W, SCREEN_H, 0);
-  }
+  int rando = (millis()%5)+1;  
+
+    switch (rando){
+    case 1:
+      gfx.fillScreen(1);
+      gfx.drawXBitmap(0, 0, pala_one_sleep_1_bits, SCREEN_W, SCREEN_H, 0);
+      break;
+    case 2:
+      gfx.fillScreen(1);
+      gfx.drawXBitmap(0, 0, pala_one_sleep_2_bits, SCREEN_W, SCREEN_H, 0);
+      break;
+    case 3:
+      gfx.fillScreen(1);
+      gfx.drawXBitmap(0, 0, pala_one_sleep_3_bits, SCREEN_W, SCREEN_H, 0);
+      break;
+    case 4:
+      gfx.fillScreen(1);
+      gfx.drawXBitmap(0, 0, pala_one_sleep_4_bits, SCREEN_W, SCREEN_H, 0);
+      break;
+    case 5:
+      gfx.fillScreen(1);
+      gfx.drawXBitmap(0, 0, pala_one_sleep_5_bits, SCREEN_W, SCREEN_H, 0);
+      break;
+    default:
+      File sf = FS.open("/sleep.bin", "r");
+      if (sf && sf.size() >= 3904) {
+        static uint8_t sleepBuf[3904];
+        sf.read(sleepBuf, 3904);
+        sf.close();
+        gfx.fillScreen(1);
+        gfx.drawXBitmap(0, 0, sleepBuf, SCREEN_W, SCREEN_H, 0);
+      } else {
+        if (sf) sf.close();
+        gfx.fillScreen(1);
+        gfx.drawXBitmap(0, 0, pala_one_sleep_black_icon_v4_bits, SCREEN_W, SCREEN_H, 0);
+      }
+    }
+
   display.update();
 }
 
